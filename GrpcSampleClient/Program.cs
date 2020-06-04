@@ -33,104 +33,116 @@ namespace GrpcSampleClient
             cfg.Bind(_options);
             
             Console.WriteLine("ClientPerThread: " + _options.ClientPerThread);
-            long successCounter = 0;
-            long errorCounter = 0;
-            long aggregateLatency = 0;
-            Exception lastError = null;
-
-            new Thread(() =>
-                {
-                    var sw = Stopwatch.StartNew();
-                while (true)
-                {
-                    sw.Restart();
-                    successCounter = 0;
-                    aggregateLatency = 0;
-                    errorCounter = 0;
-                    Thread.Sleep(_options.ReportFrequency);
-                    var ex = lastError;
-                    Console.WriteLine($"RPS {successCounter/sw.Elapsed.TotalSeconds:F0}; Errors {errorCounter}; Last elapsed {sw.ElapsedMilliseconds}ms; Latency {aggregateLatency/(successCounter + 1)*1000d/Stopwatch.Frequency:F3}ms");
-                    if (ex != null)
-                    {
-                        Console.WriteLine(ex.ToString());
-                    }
-                }
-            })
-            { IsBackground = true }.Start();
-
-            Func<int, Task> request;
-            string clientType;
-            switch (_options.Protocol)
-            {
-                case "g":
-                    request = (i) => MakeGrpcCall(new HelloRequest() {Name = "foo"}, GetGrpcNetClient(i));
-                    clientType = "Grpc.Net.Client";
-                    break;
-                case "c":
-                    request = (i) => MakeGrpcCall(new HelloRequest() {Name = "foo"}, GetGrpcCoreClient(i));
-                    clientType = "Grpc.Core";
-                    break;
-                case "r":
-                    request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
-                        streamRequest: false, streamResponse: false);
-                    clientType = "Raw HttpMessageInvoker";
-                    break;
-                case "r-stream-request":
-                    request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
-                        streamRequest: true, streamResponse: false);
-                    clientType = "Raw HttpMessageInvoker";
-                    break;
-                case "r-stream-response":
-                    request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
-                        streamRequest: false, streamResponse: true);
-                    clientType = "Raw HttpMessageInvoker";
-                    break;
-                case "r-stream-all":
-                    request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
-                        streamRequest: true, streamResponse: true);
-                    clientType = "Raw HttpMessageInvoker";
-                    break;
-                case "h2":
-                    request = (i) => MakeHttpCall(new HelloRequest() {Name = "foo"}, GetHttpClient(i, 5001),
-                        HttpVersion.Version20);
-                    clientType = "HttpClient+HTTP/2";
-                    break;
-                case "h1":
-                    request = (i) => MakeHttpCall(new HelloRequest() {Name = "foo"}, GetHttpClient(i, 5000),
-                        HttpVersion.Version11);
-                    clientType = "HttpClient+HTTP/1.1";
-                    break;
-                default:
-                    Console.WriteLine("Specify --Protocol option");
-                    return;
-            }
-
-            Console.WriteLine("Client type: " + clientType);
-
             Console.WriteLine("Parallelism: " + _options.Parallelism);
             Console.WriteLine($"{nameof(GCSettings.IsServerGC)}: {GCSettings.IsServerGC}");
 
-            await Task.WhenAll(Enumerable.Range(0,  _options.Parallelism).Select(async i =>
+            Func<int, Task> request;
+            var allProtocols = new[] {"g", "c", "r", "h1", "h2"};
+            var selectedProtocols = _options.Protocols.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            if (selectedProtocols.Contains("*"))
+                selectedProtocols = allProtocols;
+            foreach (var protocol in selectedProtocols)
             {
-                var sw = Stopwatch.StartNew();
-                while (true)
+                long successCounter = 0;
+                long errorCounter = 0;
+                long aggregateLatency = 0;
+                Exception lastError = null;
+                var timeIsUp = false;
+
+                new Thread(() =>
+                    {
+                        var testRuntime = Stopwatch.StartNew();
+                        var sw = Stopwatch.StartNew();
+                        while (!timeIsUp)
+                        {
+                            sw.Restart();
+                            successCounter = 0;
+                            aggregateLatency = 0;
+                            errorCounter = 0;
+                            Thread.Sleep(_options.ReportFrequency * 1000);
+                            var ex = lastError;
+                            Console.WriteLine($"RPS {successCounter/sw.Elapsed.TotalSeconds:F0}; Errors {errorCounter}; Last elapsed {sw.ElapsedMilliseconds}ms; Latency {aggregateLatency/(successCounter + 1)*1000d/Stopwatch.Frequency:F3}ms");
+                            if (ex != null)
+                            {
+                                Console.WriteLine(ex.ToString());
+                            }
+
+                            if (testRuntime.Elapsed.TotalSeconds > _options.TestDuration)
+                                timeIsUp = true;
+                        }
+                    })
+                    .Start();
+
+                string clientType;
+                switch (protocol)
                 {
-                    sw.Restart();
-                    try
-                    {
-                        await request(i);
-                    }
-                    catch (Exception ex)
-                    {
-                        lastError = ex;
-                        Interlocked.Increment(ref errorCounter);
-                    }
-
-                    Interlocked.Add(ref aggregateLatency, sw.ElapsedTicks);
-
-                    Interlocked.Increment(ref successCounter);
+                    case "g":
+                        request = (i) => MakeGrpcCall(new HelloRequest() {Name = "foo"}, GetGrpcNetClient(i));
+                        clientType = "Grpc.Net.Client";
+                        break;
+                    case "c":
+                        request = (i) => MakeGrpcCall(new HelloRequest() {Name = "foo"}, GetGrpcCoreClient(i));
+                        clientType = "Grpc.Core";
+                        break;
+                    case "r":
+                        request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
+                            streamRequest: false, streamResponse: false);
+                        clientType = "Raw HttpMessageInvoker";
+                        break;
+                    case "r-stream-request":
+                        request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
+                            streamRequest: true, streamResponse: false);
+                        clientType = "Raw HttpMessageInvoker";
+                        break;
+                    case "r-stream-response":
+                        request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
+                            streamRequest: false, streamResponse: true);
+                        clientType = "Raw HttpMessageInvoker";
+                        break;
+                    case "r-stream-all":
+                        request = (i) => MakeRawGrpcCall(new HelloRequest() {Name = "foo"}, GetHttpMessageInvoker(i),
+                            streamRequest: true, streamResponse: true);
+                        clientType = "Raw HttpMessageInvoker";
+                        break;
+                    case "h2":
+                        request = (i) => MakeHttpCall(new HelloRequest() {Name = "foo"}, GetHttpClient(i, 5001),
+                            HttpVersion.Version20);
+                        clientType = "HttpClient+HTTP/2";
+                        break;
+                    case "h1":
+                        request = (i) => MakeHttpCall(new HelloRequest() {Name = "foo"}, GetHttpClient(i, 5000),
+                            HttpVersion.Version11);
+                        clientType = "HttpClient+HTTP/1.1";
+                        break;
+                    default:
+                        Console.WriteLine("Specify --Protocol option");
+                        return;
                 }
-            }));
+
+                Console.WriteLine(clientType);
+                
+                await Task.WhenAll(Enumerable.Range(0,  _options.Parallelism).Select(async i =>
+                {
+                    var sw = Stopwatch.StartNew();
+                    while (!timeIsUp)
+                    {
+                        sw.Restart();
+                        try
+                        {
+                            await request(i);
+                        }
+                        catch (Exception ex)
+                        {
+                            lastError = ex;
+                            Interlocked.Increment(ref errorCounter);
+                        }
+
+                        Interlocked.Add(ref aggregateLatency, sw.ElapsedTicks);
+
+                        Interlocked.Increment(ref successCounter);
+                    }
+                }));
+            }
         }
 
         private static Greeter.GreeterClient GetGrpcNetClient(int i)
