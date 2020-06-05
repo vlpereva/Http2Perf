@@ -14,6 +14,7 @@ using System.Net.Http;
 using System.Runtime;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Configuration;
 
 namespace GrpcSampleClient
@@ -22,6 +23,7 @@ namespace GrpcSampleClient
     {
         private static readonly RecyclableMemoryStreamManager StreamPool = new RecyclableMemoryStreamManager();
         private static readonly Dictionary<int, Greeter.GreeterClient> GrpcClientCache = new Dictionary<int, Greeter.GreeterClient>();
+        private static readonly Dictionary<int, HubConnection> WsClientCache = new Dictionary<int, HubConnection>();
         private static readonly Dictionary<int, HttpClient> HttpClientCache = new Dictionary<int, HttpClient>();
         private static readonly Dictionary<int, HttpMessageInvoker> HttpMessageInvokerCache = new Dictionary<int, HttpMessageInvoker>();
         
@@ -37,7 +39,7 @@ namespace GrpcSampleClient
             Console.WriteLine($"{nameof(GCSettings.IsServerGC)}: {GCSettings.IsServerGC}");
 
             Func<int, Task> request;
-            var allProtocols = new[] {"g", "c", "r", "h1", "h2"};
+            var allProtocols = new[] {"g", "c", "r", "h1", "h2", "ws"};
             var selectedProtocols = _options.Protocols.Split(',', StringSplitOptions.RemoveEmptyEntries);
             if (selectedProtocols.Contains("*"))
                 selectedProtocols = allProtocols;
@@ -114,6 +116,10 @@ namespace GrpcSampleClient
                             HttpVersion.Version11);
                         clientType = "HttpClient+HTTP/1.1";
                         break;
+                    case "ws":
+                        request = (i) => MakeWsCall(new HelloRequest() {Name = "foo"}, GetWsClient(i));
+                        clientType = "SignalR/Websockets";
+                        break;
                     default:
                         Console.WriteLine("Specify --Protocol option");
                         return;
@@ -143,6 +149,22 @@ namespace GrpcSampleClient
                     }
                 }));
             }
+        }
+        
+        private static HubConnection GetWsClient(int i)
+        {
+            if (!_options.ClientPerThread)
+            {
+                i = 0;
+            }
+            if (!WsClientCache.TryGetValue(i, out var client))
+            {
+                client = new HubConnectionBuilder().WithUrl("https://localhost:5000/websock").Build();
+                client.StartAsync().Wait();
+                WsClientCache.Add(i, client);
+            }
+
+            return client;
         }
 
         private static Greeter.GreeterClient GetGrpcNetClient(int i)
@@ -221,11 +243,16 @@ namespace GrpcSampleClient
             };
             return new Greeter.GreeterClient(GrpcChannel.ForAddress(baseUri.Uri, channelOptions));
         }
-
+        
         private static Greeter.GreeterClient GetGrpcCoreClient(string host, int port)
         {
             var channel = new Channel(host + ":" + port, ChannelCredentials.Insecure);
             return new Greeter.GreeterClient(channel);
+        }
+        
+        private static async Task<HelloReply> MakeWsCall(HelloRequest request, HubConnection connection)
+        {
+            return await connection.InvokeAsync<HelloReply>("SayHello", request);
         }
 
         private static async Task<HelloReply> MakeGrpcCall(HelloRequest request, Greeter.GreeterClient client)

@@ -6,6 +6,7 @@ using System.Net;
 using System.Threading.Tasks;
 using Google.Protobuf;
 using GrpcSample;
+using GrpcSampleServer.Services;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -23,6 +24,7 @@ namespace GrpcSampleServer
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddGrpc();
+            services.AddSignalR();
         }
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
@@ -37,10 +39,11 @@ namespace GrpcSampleServer
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapGrpcService<GreeterService>();
+                endpoints.MapHub<GreeterHub>("/websock");
 
                 endpoints.MapPost("/", async context =>
                 {
-                    using var memStream = StreamPool.GetStream();
+                    await using var memStream = StreamPool.GetStream();
                     await context.Request.Body.CopyToAsync(memStream);
                     memStream.Position = 0;
                     var request = HelloRequest.Parser.ParseDelimitedFrom(memStream);
